@@ -26,6 +26,7 @@ from openerp.addons.connector.session import ConnectorSession
 from datetime import datetime
 from .product_category import category_import_batch
 from .product import product_import_batch
+from .product import product_export_batch
 from .customer import customer_import_batch
 from .sale import sale_order_import_batch
 
@@ -162,6 +163,19 @@ class wc_backend(models.Model):
             {'from_date': from_date,
              'to_date': import_start_time}, priority=4)
         return True
+    
+    @api.multi
+    def export_product(self):
+        session = ConnectorSession(self.env.cr, self.env.uid,
+                                   context=self.env.context)
+        import_start_time = datetime.now()
+        backend_id = self.id
+        from_date = None
+        product_export_batch.delay(
+            session, 'woo.product.product', backend_id,
+            {'from_date': from_date,
+             'to_date': import_start_time}, priority=2)
+        return True
 
     @api.multi
     def import_categories(self):
@@ -189,4 +203,33 @@ class wc_backend(models.Model):
         """ Import Orders from all websites """
         for backend in self:
             backend.import_order()
+        return True
+    
+    @api.multi
+    def export_products(self):
+        """ ZZZ """
+        for backend in self:
+            backend.export_product()
+        return True
+    
+    @api.multi
+    def test_create_product(self):
+        """ AAA """
+        location = self.location
+        cons_key = self.consumer_key
+        sec_key = self.consumer_secret
+        version = 'v2'
+
+        wcapi = API(url=location, consumer_key=cons_key,
+                    consumer_secret=sec_key, version=version)
+        data = {
+            "product": {
+                "title": "Premium Quality",
+                "type": "simple",
+                "regular_price": "21.99",
+                "description": "Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas. Vestibulum tortor quam, feugiat vitae, ultricies eget, tempor sit amet, ante. Donec eu libero sit amet quam egestas semper. Aenean ultricies mi vitae est. Mauris placerat eleifend leo.",
+                "short_description": "Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas.",
+            }
+        }
+        print(wcapi.post("products", data).json())
         return True

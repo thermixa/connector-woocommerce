@@ -22,11 +22,13 @@
 import socket
 import logging
 import xmlrpclib
+import re
 from woocommerce import API
 from openerp.addons.connector.unit.backend_adapter import CRUDAdapter
 from openerp.addons.connector.exception import (NetworkRetryableError,
                                                 RetryableJobError)
 from datetime import datetime
+from zeitgeist.datamodel import STARTSWITH
 _logger = logging.getLogger(__name__)
 
 recorder = {}
@@ -118,6 +120,7 @@ class WooCRUDAdapter(CRUDAdapter):
 
     def create(self, data):
         """ Create a record on the external system """
+        print('AZAZZZZZ')
         raise NotImplementedError
 
     def write(self, id, data):
@@ -128,7 +131,7 @@ class WooCRUDAdapter(CRUDAdapter):
         """ Delete a record on the external system """
         raise NotImplementedError
 
-    def _call(self, method, arguments):
+    def _call(self, url, arguments=False, method='get'):
         try:
             _logger.debug("Start calling Woocommerce api %s", method)
             api = API(url=self.woo.location,
@@ -136,26 +139,45 @@ class WooCRUDAdapter(CRUDAdapter):
                       consumer_secret=self.woo.consumer_secret,
                       version='v2')
             if api:
-                if isinstance(arguments, list):
-                    while arguments and arguments[-1] is None:
-                        arguments.pop()
+                #if isinstance(arguments, list):
+                #    while arguments and arguments[-1] is None:
+                #        arguments.pop()
                 start = datetime.now()
+                status_code = False
                 try:
-                    if 'false' or 'true' or 'null'in api.get(method).content:
-                        result = api.get(method).content.replace(
-                            'false', 'False')
+                    #if 'false' or 'true' or 'null'in api.get(method).content:
+                    #    result = api.get(method).content.replace(
+                    #        'false', 'False')
+                    #    result = result.replace('true', 'True')
+                    #    result = result.replace('null', 'False')
+                    #    result = eval(result)
+                    #else:
+                    #    result = eval(api.get(method).content)
+                    if arguments:
+                        response = getattr(api, method)(url, arguments)
+                    else:
+                        response = getattr(api, method)(url)   
+                    status_code = str(response.status_code)
+                    if not re.match(r"2(\d){2}", status_code):
+                        raise
+                    result = response.content
+                    if 'false' or 'true' or 'null' in result:
+                        result = result.replace('false', 'False')
                         result = result.replace('true', 'True')
                         result = result.replace('null', 'False')
-                        result = eval(result)
-                    else:
-                        result = eval(api.get(method).content)
+                    print(result)
+                    result = eval(result)
                 except:
-                    _logger.error("api.call(%s, %s) failed", method, arguments)
-                    raise
+                    error = "api.%s(%s, %s) failed" % (method, url, arguments)
+                    if status_code:
+                        error += " with status_code %s" % (status_code)
+                    _logger.error(error)
+                    raise Exception(error)
                 else:
-                    _logger.debug("api.call(%s, %s) returned %s in %s seconds",
-                                  method, arguments, result,
-                                  (datetime.now() - start).seconds)
+                    debug = "api.%s(%s, %s) returned %s in %s seconds" % (method, url, arguments, result, (datetime.now() - start).seconds)
+                    if status_code:
+                        debug += " with status_code %s" % (status_code)
+                    _logger.debug(debug)
                 return result
         except (socket.gaierror, socket.error, socket.timeout) as err:
             raise NetworkRetryableError(
@@ -180,6 +202,14 @@ class GenericAdapter(WooCRUDAdapter):
 
     _model_name = None
     _woo_model = None
+    
+    def connect(self):
+        #TODO
+        api = API(url = self.woo.location,
+                  consumer_key = self.woo.consumer_key,
+                  consumer_secret = self.woo.consumer_secret,
+                  version = 'v2')
+        return api
 
     def search(self, filters=None):
         """ Search records according to some criterias
@@ -195,15 +225,9 @@ class GenericAdapter(WooCRUDAdapter):
 
         :rtype: dict
         """
-        arguments = []
-        if attributes:
-            # Avoid to pass Null values in attributes. Workaround for
-            # is not installed, calling info() with None in attributes
-            # would return a wrong result (almost empty list of
-            # attributes). The right correction is to install the
-            # compatibility patch on WooCommerce.
-            arguments.append(attributes)
-        return self._call('%s/' % self._woo_model + str(id), [])
+        url = '%s/%s' % (self._woo_model, str(id))
+        return self._call(url, attributes)
+        #return self._call('%s/' % self._woo_model + str(id), [])
 
     def search_read(self, filters=None):
         """ Search records according to some criterias
@@ -212,12 +236,17 @@ class GenericAdapter(WooCRUDAdapter):
 
     def create(self, data):
         """ Create a record on the external system """
-        return self._call('%s.create' % self._woo_model, [data])
+        print('CREATE BACKEND')
+        url = self._woo_model
+        return self._call(url, data, method='post')
 
     def write(self, id, data):
         """ Update records on the external system """
-        return self._call('%s.update' % self._woo_model,
-                          [int(id), data])
+        print('WRITE BACKEND')
+        url = '%s/%s' % (self._woo_model, str(id))
+        return self._call(url, data, method='put')
+        #return self._call('%s.update' % self._woo_model,
+        #                  [int(id), data])
 
     def delete(self, id):
         """ Delete a record on the external system """

@@ -60,6 +60,17 @@
                             <button name="import_orders" type="object" class="oe_highlight"
                                 string="Import in background" />
                         </group>
+                        
+						<group>
+							<label string="Export Product" class="oe_inline" />
+							<button name="export_products" type="object" class="oe_highlight"
+								string="Export in background" />
+						</group>
+						<group>
+							<label string="Create a test product" class="oe_inline" />
+							<button name="test_create_product" type="object" class="oe_highlight"
+								string="Create a test product" />
+						</group>
 					</sheet>
 				</form>
 			</field>

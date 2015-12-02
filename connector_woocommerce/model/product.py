@@ -27,13 +27,17 @@ from openerp import models, fields
 from openerp.addons.connector.queue.job import job
 from openerp.addons.connector.exception import MappingError
 from openerp.addons.connector.unit.synchronizer import (Importer,
+                                                        ExportSynchronizer
                                                         )
+from openerp.addons.connector.event import on_record_create, on_record_write
 from openerp.addons.connector.unit.mapper import (mapping,
-                                                  ImportMapper
+                                                  ImportMapper,
+                                                  ExportMapper
                                                   )
 from openerp.addons.connector.exception import IDMissingInBackend
 from ..unit.backend_adapter import (GenericAdapter)
 from ..unit.import_synchronizer import (DelayedBatchImporter, WooImporter)
+from ..unit.export_synchronizer import (WooExporter, export_record)
 from ..connector import get_environment
 from ..backend import woo
 
@@ -56,7 +60,7 @@ class WooProductProduct(models.Model):
         string='Woo Backend',
         store=True,
         readonly=False,
-        required=True,
+        required=False,
     )
 
     slug = fields.Char('Slung Name')
@@ -71,17 +75,22 @@ class ProductProduct(models.Model):
         comodel_name='product.category',
         string='Woo product category',
     )
+    woo_bind_ids = fields.One2many(
+        comodel_name='woo.product.product',
+        inverse_name='openerp_id',
+        string="Woo Bindings",
+    )
     in_stock = fields.Boolean('In Stock')
 
 
 @woo
 class ProductProductAdapter(GenericAdapter):
     _model_name = 'woo.product.product'
-    _woo_model = 'products/details'
+    _woo_model = 'products'
 
-    def _call(self, method, arguments):
+    def _call(self, url, arguments=False, method='get'):
         try:
-            return super(ProductProductAdapter, self)._call(method, arguments)
+            return super(ProductProductAdapter, self)._call(url, arguments=arguments, method=method)
         except xmlrpclib.Fault as err:
             # this is the error in the WooCommerce API
             # when the customer does not exist
@@ -108,8 +117,7 @@ class ProductProductAdapter(GenericAdapter):
             filters.setdefault('updated_at', {})
             filters['updated_at']['to'] = to_date.strftime(dt_fmt)
 
-        return self._call('products/list',
-                          [filters] if filters else [{}])
+        return self._call('products/list')
 
     def get_images(self, id, storeview_id=None):
         return self._call('products/' + str(id), [int(id), storeview_id, 'id'])
@@ -117,6 +125,30 @@ class ProductProductAdapter(GenericAdapter):
     def read_image(self, id, image_name, storeview_id=None):
         return self._call('products',
                           [int(id), image_name, storeview_id, 'id'])
+        
+    #def create(self, product):
+    #    print('****pp')
+    #    print(product)
+    #    data = {
+    #        'product': {
+    #            'title': product.name
+    #        }
+    #    }
+    #    return self.create(data)
+        
+    def export_quantity(self, filters, quantity):
+        print('ok')
+        data = {
+            "product": {
+                "title": "Premium Quality",
+                "type": "simple",
+                "regular_price": "21.99",
+                "description": "Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas. Vestibulum tortor quam, feugiat vitae, ultricies eget, tempor sit amet, ante. Donec eu libero sit amet quam egestas semper. Aenean ultricies mi vitae est. Mauris placerat eleifend leo.",
+                "short_description": "Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas.",
+            }
+        }
+        print('ok2')
+        return self.create(data)
 
 
 @woo
@@ -320,6 +352,57 @@ class ProductProductImportMapper(ImportMapper):
         return {'backend_id': self.backend_record.id}
 
 
+@woo
+class ProductProductExport(WooExporter):
+    _model_name = ['woo.product.product']
+    _data_key = 'product'
+#
+#    def get_filter(self, product):
+#        binder = self.get_binder_for_model()
+#        prestashop_id = binder.to_backend(product.id)
+#        return {
+#            'filter[id_product]': prestashop_id,
+#            'filter[id_product_attribute]': 0
+#        }
+
+    #def run(self, binding_id, fields):
+    #    """ ZZZ """
+    #    product = self.session.browse(self.model._name, binding_id)
+    #    print('-----')
+    #    print(product)
+    #    print('-----')
+    #    adapter = self.get_connector_unit_for_model(
+    #        GenericAdapter, 'woo.product.product'
+    #    )
+    #    #filter = self.get_filter(product)
+    #    #filter  = 5
+    #    #adapter.export_quantity(filter, product.name)
+    #    adapter.create(product)
+    
+    #def _create_data(self, map_record, fields=None, **kwargs):
+    #    """ Get the data to pass to :py:meth:`_create` """
+    #    print('dans create data')
+    #    print(self._data_key)
+    #    data = map_record.values(for_create=True, fields=fields, **kwargs)
+    #    return {'product': data}
+    
+    #def _create(self, data):
+    #    """ Create the Magento record """
+    #    # special check on data before export
+    #    self._validate_create_data(data)
+   #     result = self.backend_adapter.create(data)
+     #   return result['product']['id']
+        
+        
+@woo
+class ProductProductExportMapper(ExportMapper):
+    _model_name = 'woo.product.product'
+
+    direct = [
+        ('name', 'title'),
+        ('list_price', 'regular_price')
+    ]
+
 @job(default_channel='root.woo')
 def product_import_batch(session, model_name, backend_id, filters=None):
     """ Prepare the import of product modified on Woo """
@@ -328,3 +411,122 @@ def product_import_batch(session, model_name, backend_id, filters=None):
     env = get_environment(session, model_name, backend_id)
     importer = env.get_connector_unit(ProductBatchImporter)
     importer.run(filters=filters)
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@on_record_create(model_names='product.product')
+def product_create_bindings(session, model_name, record_id, vals):
+    """
+    Create a ``magento.account.invoice`` record. This record will then
+    be exported to Magento.
+    """
+    print('CREATE PRODUCT')
+    session.env['woo.product.product'].create({
+        'backend_id': 1,
+        'openerp_id': record_id})
+    
+    
+@on_record_write(model_names='product.product')
+def product_write_bindings(session, model_name, record_id, vals):
+    """
+    Create a ``magento.account.invoice`` record. This record will then
+    be exported to Magento.
+    """
+    print('WRITE PRODUCT')
+    print(vals)
+    delay_export_all_bindings(session, model_name, record_id, vals)
+
+@on_record_create(model_names='woo.product.product')
+def delay_export_product_product(session, model_name, record_id, vals):
+    """
+    Delay the job to export the magento invoice.
+    """
+    print('CREATE WOO PRODUCT')
+    delay_export(session, model_name, record_id, vals)
+
+def delay_export(session, model_name, record_id, vals):
+    """ Delay a job which export a binding record.
+    (A binding record being a ``magento.res.partner``,
+    ``magento.product.product``, ...)
+    """
+    if session.context.get('connector_no_export'):
+        return
+    fields = vals.keys()
+    print('delay_export')
+    print(fields)
+    export_record.delay(session, model_name, record_id, fields=fields)
+    
+def delay_export_all_bindings(session, model_name, record_id, vals):
+    """ Delay a job which export all the bindings of a record.
+    In this case, it is called on records of normal models and will delay
+    the export for all the bindings.
+    """
+    if session.context.get('connector_no_export'):
+        return
+    record = session.env[model_name].browse(record_id)
+    fields = vals.keys()
+    print('delay_export_all_bindings')
+    print(fields)
+    for binding in record.woo_bind_ids:
+        export_record.delay(session, binding._model._name, binding.id,
+                            fields=fields)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#@job(default_channel='root.woo')
+#def export_product(session, model_name, record_id, fields=None):
+#    """ Export a validated or paid invoice. """
+#    product = session.env[model_name].browse(record_id)
+#    print(fields)
+#    print(product)
+#    backend_id = product.backend_id.id
+#    print(backend_id)
+#    env = get_environment(session, model_name, backend_id)
+#    exporter = env.get_connector_unit(ProductProductExport)
+#    return exporter.run(record_id, fields)
+
+
+
+
+    
+@job(default_channel='root.woo')
+def product_export_batch(session, model_name, record_id, fields=None):
+    """ ZZZ """
+    print(record_id)
+    print(model_name)
+    product = session.browse(model_name, record_id)
+    backend_id = product.backend_id.id
+    env = get_environment(session, model_name, backend_id)
+    exporter = env.get_connector_unit(ProductProductExport)
+    return exporter.run(record_id, fields)
